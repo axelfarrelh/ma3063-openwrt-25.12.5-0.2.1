@@ -7,6 +7,14 @@ on:
         description: "Tag OpenWrt"
         default: "v25.12.5"
         required: true
+      fw_memory_mode:
+        description: "Mode memori firmware ath11k (1 = hemat, 2 = paling hemat untuk RAM 256 MB)"
+        type: choice
+        options:
+          - "2"
+          - "1"
+        default: "2"
+        required: true
 
 jobs:
   build:
@@ -40,6 +48,17 @@ jobs:
         run: |
           git -c user.name=ci -c user.email=ci@localhost am ../patches/*.patch
 
+      - name: Atur mode memori firmware WiFi
+        working-directory: openwrt
+        env:
+          FW_MEM_MODE: ${{ inputs.fw_memory_mode }}
+        run: |
+          dts=target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq5018-rg-ma3063.dts
+          sed -i -E "s/(qcom,ath11k-fw-memory-mode = <)[0-9]+(>;)/\1${FW_MEM_MODE}\2/" "$dts"
+          # Kedua radio (IPQ5018 2.4 GHz dan QCN6102 5 GHz) harus ikut berubah
+          test "$(grep -c "qcom,ath11k-fw-memory-mode = <${FW_MEM_MODE}>;" "$dts")" -eq 2
+          grep -n "qcom,ath11k-fw-memory-mode" "$dts"
+
       - name: Feeds
         working-directory: openwrt
         run: |
@@ -65,7 +84,7 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: openwrt-${{ inputs.openwrt_tag }}-ruijie_rg-ma3063
+          name: openwrt-${{ inputs.openwrt_tag }}-ruijie_rg-ma3063-fwmem${{ inputs.fw_memory_mode }}
           path: |
             openwrt/bin/targets/qualcommax/ipq50xx/*ruijie_rg-ma3063*
             openwrt/bin/targets/qualcommax/ipq50xx/sha256sums
