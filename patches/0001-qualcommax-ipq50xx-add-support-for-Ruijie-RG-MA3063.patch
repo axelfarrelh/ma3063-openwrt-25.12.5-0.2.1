@@ -1,0 +1,927 @@
+From 6b7073c8497f4496979d534399eacc7f3981dd48 Mon Sep 17 00:00:00 2001
+From: OpenWrt port <noreply@example.invalid>
+Date: Sat, 17 Oct 2026 21:15:42 +0700
+Subject: [PATCH] qualcommax: ipq50xx: add support for Ruijie RG-MA3063
+
+Ruijie RG-MA3063 is an AX3000 router, sold mainly as a China Mobile
+customised unit. Hardware is close to the CMCC PZ-L8.
+
+Specifications:
+- SoC: Qualcomm IPQ5018 (board AP-MP02.1), dual-core A53
+- RAM: 256 MiB DDR3
+- Flash: 128 MiB SPI-NAND (Winbond, Macronix or FudanMicro FM25S01A)
+- Ethernet: 4x 1GbE
+  - socket 1 (next to the power jack): wan, IPQ5018 GE Phy (dp1)
+  - sockets 2, 3 and the one printed "WAN": lan1-lan3, QCA8337 over
+    SGMII (dp2)
+- WiFi 2.4 GHz: IPQ5018 2x2 802.11ax
+- WiFi 5 GHz: QCN6102 2x2 802.11ax
+- LEDs: status green/blue/red
+- Buttons: reset, WPS
+- UART: 115200n8
+
+MAC addresses come from the U-Boot env (0:appsblenv, ethaddr):
+- LAN (dp2 conduit): ethaddr
+- WAN (dp1): ethaddr + 1
+- 2.4 GHz: ethaddr + 2
+- 5 GHz: ethaddr + 3
+
+Both radios use firmware memory mode 1 because of the 256 MiB RAM.
+
+The FIT image carries both config@mp02.1 and config@mp03.5-c1 (same kernel
+and DTB): units in the field ship with U-Boot builds that look for either.
+
+Installation (UART):
+1. Interrupt U-Boot, set ipaddr/serverip and serve the image via TFTP.
+2. Test first: tftpboot 0x44000000 <initramfs-uImage.itb>; bootm 0x44000000
+3. Flash both slots:
+   tftpboot 0x44000000 <squashfs-factory.ubi>
+   flash rootfs; flash rootfs_1; reset
+Later upgrades use sysupgrade, which follows the QSDK A/B bootconfig.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01CqXAQbYSDqUQToCJFM8bXZ
+---
+ .../uboot-envtools/files/qualcommax_ipq50xx   |   1 +
+ package/firmware/ipq-wifi/Makefile            |   4 +-
+ .../files/board-ruijie_rg-ma3063.ipq5018      | Bin 0 -> 131180 bytes
+ .../files/board-ruijie_rg-ma3063.qcn6122      | Bin 0 -> 131180 bytes
+ .../arm64/boot/dts/qcom/ipq5018-rg-ma3063.dts | 392 ++++++++++++++++++
+ target/linux/qualcommax/image/ipq50xx.mk      |  30 ++
+ .../ipq50xx/base-files/etc/board.d/02_network |   1 +
+ .../etc/hotplug.d/firmware/11-ath11k-caldata  |  12 +
+ .../base-files/lib/upgrade/platform.sh        |   3 +-
+ 9 files changed, 441 insertions(+), 2 deletions(-)
+ create mode 100644 package/firmware/ipq-wifi/files/board-ruijie_rg-ma3063.ipq5018
+ create mode 100644 package/firmware/ipq-wifi/files/board-ruijie_rg-ma3063.qcn6122
+ create mode 100644 target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq5018-rg-ma3063.dts
+
+diff --git a/package/boot/uboot-tools/uboot-envtools/files/qualcommax_ipq50xx b/package/boot/uboot-tools/uboot-envtools/files/qualcommax_ipq50xx
+index 6366859..e986cc7 100644
+--- a/package/boot/uboot-tools/uboot-envtools/files/qualcommax_ipq50xx
++++ b/package/boot/uboot-tools/uboot-envtools/files/qualcommax_ipq50xx
+@@ -11,6 +11,7 @@ case "$board" in
+ cmcc,pz-l8|\
+ elecom,wrc-x3000gs2|\
+ iodata,wn-dax3000gr|\
++ruijie,rg-ma3063|\
+ zyxel,scr50axe)
+ 	ubootenv_add_mtd "0:appsblenv" "0x0" "0x40000" "0x20000"
+ 	;;
+diff --git a/package/firmware/ipq-wifi/Makefile b/package/firmware/ipq-wifi/Makefile
+index 649f670..064f0fc 100644
+--- a/package/firmware/ipq-wifi/Makefile
++++ b/package/firmware/ipq-wifi/Makefile
+@@ -77,6 +77,7 @@ ALLWIFIBOARDS:= \
+ 	qihoo_360v6 \
+ 	qnap_301w \
+ 	redmi_ax6 \
++	ruijie_rg-ma3063 \
+ 	skspruce_wia3300-20 \
+ 	spectrum_sax1v1k \
+ 	tplink_deco-x80-5g \
+@@ -186,7 +187,7 @@ Do not install it for any other device!
+   endef
+ 
+   define Package/ipq-wifi-$(1)/install-overlay
+-    $$$$(foreach IPQ_WIFI_BOARD_FILE,$$$$(wildcard $(PKG_BUILD_DIR)/board-$(1).*),\
++    $$$$(foreach IPQ_WIFI_BOARD_FILE,$$$$(wildcard $(PKG_BUILD_DIR)/board-$(1).* $(CURDIR)/files/board-$(1).*),\
+       $$$$(call ipq-wifi-install-one,$$$$(IPQ_WIFI_BOARD_FILE),$$(1)))
+   endef
+ 
+@@ -261,6 +262,7 @@ $(eval $(call generate-ipq-wifi-package,qihoo_360v6,Qihoo 360V6))
+ $(eval $(call generate-ipq-wifi-package,qnap_301w,QNAP 301w))
+ $(eval $(call generate-ipq-wifi-package,prpl_haze,prpl Haze))
+ $(eval $(call generate-ipq-wifi-package,redmi_ax6,Redmi AX6))
++$(eval $(call generate-ipq-wifi-package,ruijie_rg-ma3063,Ruijie RG-MA3063))
+ $(eval $(call generate-ipq-wifi-package,skspruce_wia3300-20,SKSpruce WIA3300-20))
+ $(eval $(call generate-ipq-wifi-package,spectrum_sax1v1k,Spectrum SAX1V1K))
+ $(eval $(call generate-ipq-wifi-package,tplink_deco-x80-5g,TP-Link Deco X80-5G))
+diff --git a/package/firmware/ipq-wifi/files/board-ruijie_rg-ma3063.ipq5018 b/package/firmware/ipq-wifi/files/board-ruijie_rg-ma3063.ipq5018
+new file mode 100644
+index 0000000000000000000000000000000000000000..cd2a5724e495ec81e5a96e3f8bba98b10cb7f496
+GIT binary patch
+literal 131180
+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
+UPzIC%Wk4BF29yD1;9N2A|H@7dHUIzs
+
+literal 0
+HcmV?d00001
+
+diff --git a/package/firmware/ipq-wifi/files/board-ruijie_rg-ma3063.qcn6122 b/package/firmware/ipq-wifi/files/board-ruijie_rg-ma3063.qcn6122
+new file mode 100644
+index 0000000000000000000000000000000000000000..01dbd7f3e6a6074876b88a0f9ade7875f50e7778
+GIT binary patch
+literal 131180
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq5018-rg-ma3063.dts b/target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq5018-rg-ma3063.dts
+new file mode 100644
+index 0000000..578f0c8
+--- /dev/null
++++ b/target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq5018-rg-ma3063.dts
+@@ -0,0 +1,392 @@
++// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
++
++/dts-v1/;
++
++#include "ipq5018.dtsi"
++#include "ipq5018-ess.dtsi"
++#include "ipq5018-qcn6122.dtsi"
++
++#include <dt-bindings/gpio/gpio.h>
++#include <dt-bindings/input/input.h>
++#include <dt-bindings/leds/common.h>
++
++/ {
++	model = "Ruijie RG-MA3063";
++	compatible = "ruijie,rg-ma3063", "qcom,ipq5018";
++
++	aliases {
++		serial0 = &blsp1_uart1;
++		led-boot = &led_status_green;
++		led-failsafe = &led_status_red;
++		led-running = &led_status_green;
++		led-upgrade = &led_status_red;
++		label-mac-device = &dp2;
++	};
++
++	chosen {
++		bootargs-append = " root=/dev/ubiblock0_1 swiotlb=1 coherent_pool=2M";
++		stdout-path = "serial0:115200n8";
++	};
++
++	keys {
++		compatible = "gpio-keys";
++		pinctrl-0 = <&button_pins>;
++		pinctrl-names = "default";
++
++		reset-button {
++			label = "reset";
++			gpios = <&tlmm 33 GPIO_ACTIVE_LOW>;
++			linux,code = <KEY_RESTART>;
++		};
++
++		wps-button {
++			label = "wps";
++			gpios = <&tlmm 34 GPIO_ACTIVE_LOW>;
++			linux,code = <KEY_WPS_BUTTON>;
++		};
++	};
++
++	leds {
++		compatible = "gpio-leds";
++		pinctrl-0 = <&led_pins>;
++		pinctrl-names = "default";
++
++		led_status_green: led-0 {
++			gpios = <&tlmm 19 GPIO_ACTIVE_LOW>;
++			color = <LED_COLOR_ID_GREEN>;
++			function = LED_FUNCTION_STATUS;
++		};
++
++		led_status_blue: led-1 {
++			gpios = <&tlmm 32 GPIO_ACTIVE_LOW>;
++			color = <LED_COLOR_ID_BLUE>;
++			function = LED_FUNCTION_STATUS;
++		};
++
++		led_status_red: led-2 {
++			gpios = <&tlmm 38 GPIO_ACTIVE_LOW>;
++			color = <LED_COLOR_ID_RED>;
++			function = LED_FUNCTION_STATUS;
++		};
++	};
++};
++
++&sleep_clk {
++	clock-frequency = <32000>;
++};
++
++&xo_board_clk {
++	clock-div = <4>;
++	clock-mult = <1>;
++};
++
++&blsp1_uart1 {
++	status = "okay";
++
++	pinctrl-0 = <&serial_0_pins>;
++	pinctrl-names = "default";
++};
++
++&crypto {
++	status = "okay";
++};
++
++&cryptobam {
++	status = "okay";
++};
++
++&prng {
++	status = "okay";
++};
++
++&qfprom {
++	status = "okay";
++};
++
++&qpic_bam {
++	status = "okay";
++};
++
++&qpic_nand {
++	pinctrl-0 = <&qpic_pins>;
++	pinctrl-names = "default";
++	status = "okay";
++
++	/*
++	 * Three SPI-NAND parts are known on this board (Winbond, Macronix
++	 * and FudanMicro FM25S01A), all 128 MiB with 2 KiB pages.
++	 */
++	flash@0 {
++		compatible = "spi-nand";
++		reg = <0>;
++		nand-ecc-engine = <&qpic_nand>;
++		nand-bus-width = <8>;
++
++		partitions {
++			compatible = "qcom,smem-part";
++
++			partition-0-appsblenv {
++				compatible = "fixed-partitions";
++				label = "0:appsblenv";
++				#address-cells = <1>;
++				#size-cells = <1>;
++
++				partition@0 {
++					label = "env-data";
++					reg = <0x0 0x40000>;
++
++					nvmem-layout {
++						compatible = "u-boot,env";
++
++						macaddr_appsblenv_ethaddr: ethaddr {
++							compatible = "mac-base";
++							#nvmem-cell-cells = <1>;
++						};
++					};
++				};
++			};
++
++			partition-art {
++				label = "0:art";
++				read-only;
++			};
++		};
++	};
++};
++
++&switch {
++	status = "okay";
++
++	switch_mac_mode = <MAC_MODE_SGMII_CHANNEL0>;
++
++	qcom,port_phyinfo {
++		// MAC0 -> GE Phy -> socket 1 next to the power jack (wan)
++		port@0 {
++			port_id = <1>;
++			mdiobus = <&mdio0>;
++			phy_address = <7>;
++		};
++
++		// MAC1 -> Uniphy --- SGMII --- QCA8337 SerDes (Port6)
++		port@1 {
++			port_id = <2>;
++			mdiobus = <&mdio1>;
++			forced-speed = <1000>;
++			forced-duplex = <1>;
++		};
++	};
++};
++
++/*
++ * Unlike the CMCC PZ-L8, the IPQ5018 GE Phy is wired straight to physical
++ * port 1 (closest to the power jack, also the port U-Boot uses for TFTP).
++ * It is used as WAN so routed traffic does not share the SGMII link with
++ * the LAN ports; the three QCA8337 ports (sockets 2, 3 and the one printed
++ * "WAN") become lan1-lan3.
++ */
++&dp1 {
++	status = "okay";
++
++	label = "wan";
++	nvmem-cells = <&macaddr_appsblenv_ethaddr 1>;
++	nvmem-cell-names = "mac-address";
++};
++
++&dp2 {
++	status = "okay";
++
++	nvmem-cells = <&macaddr_appsblenv_ethaddr 0>;
++	nvmem-cell-names = "mac-address";
++
++	fixed-link {
++		speed = <1000>;
++		full-duplex;
++	};
++};
++
++&mdio0 {
++	status = "okay";
++};
++
++&ge_phy {
++	qcom,dac-preset-short-cable;
++};
++
++&mdio1 {
++	status = "okay";
++
++	pinctrl-0 = <&mdio1_pins>;
++	pinctrl-names = "default";
++	reset-gpios = <&tlmm 26 GPIO_ACTIVE_LOW>;
++	reset-delay-us = <10000>;
++	reset-post-delay-us = <150000>;
++
++	// QCA8337 Phy0 -> socket 2 (lan1)
++	qca8337_0: ethernet-phy@0 {
++		reg = <0>;
++	};
++
++	// QCA8337 Phy1 -> socket 3 (lan2)
++	qca8337_1: ethernet-phy@1 {
++		reg = <1>;
++	};
++
++	// QCA8337 Phy2 -> socket printed "WAN" (lan3)
++	qca8337_2: ethernet-phy@2 {
++		reg = <2>;
++	};
++
++	// QCA8337 Phy3 -> not wired to a socket
++	qca8337_3: ethernet-phy@3 {
++		reg = <3>;
++	};
++
++	// QCA8337 Phy4 -> IPQ5018 GE Phy
++	qca8337_4: ethernet-phy@4 {
++		reg = <4>;
++	};
++
++	switch1: ethernet-switch@17 {
++		compatible = "qca,qca8337";
++		reg = <17>;
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		ports {
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			port@1 {
++				reg = <1>;
++				label = "lan1";
++				phy-handle = <&qca8337_0>;
++			};
++
++			port@2 {
++				reg = <2>;
++				label = "lan2";
++				phy-handle = <&qca8337_1>;
++			};
++
++			port@3 {
++				reg = <3>;
++				label = "lan3";
++				phy-handle = <&qca8337_2>;
++			};
++
++			port@6 {
++				reg = <6>;
++				phy-mode = "sgmii";
++				ethernet = <&dp2>;
++				qca,sgmii-enable-pll;
++
++				fixed-link {
++					speed = <1000>;
++					full-duplex;
++				};
++			};
++		};
++	};
++};
++
++&tlmm {
++	button_pins: button-state {
++		pins = "gpio33", "gpio34";
++		function = "gpio";
++		drive-strength = <8>;
++		bias-pull-up;
++	};
++
++	led_pins: led-state {
++		pins = "gpio19", "gpio32", "gpio38";
++		function = "gpio";
++		drive-strength = <8>;
++		bias-disable;
++	};
++
++	mdio1_pins: mdio-state {
++		mdc-pins {
++			pins = "gpio36";
++			function = "mdc";
++			drive-strength = <8>;
++			bias-pull-up;
++		};
++
++		mdio-pins {
++			pins = "gpio37";
++			function = "mdio";
++			drive-strength = <8>;
++			bias-pull-up;
++		};
++	};
++
++	qpic_pins: qpic-state {
++		clock-pins {
++			pins = "gpio9";
++			function = "qspi_clk";
++			drive-strength = <8>;
++			bias-disable;
++		};
++
++		cs-pins {
++			pins = "gpio8";
++			function = "qspi_cs";
++			drive-strength = <8>;
++			bias-disable;
++		};
++
++		data-pins {
++			pins = "gpio4", "gpio5", "gpio6", "gpio7";
++			function = "qspi_data";
++			drive-strength = <8>;
++			bias-disable;
++		};
++	};
++
++	serial_0_pins: uart0-state {
++		pins = "gpio28", "gpio29";
++		function = "blsp0_uart1";
++		drive-strength = <8>;
++		bias-disable;
++	};
++};
++
++/*
++ * 256 MiB RAM: run both radios in the reduced firmware memory mode. The
++ * CMCC PZ-L8 (same platform, same RAM) ships with Wi-Fi disabled upstream
++ * because of OOM under LuCI; keep the package set lean on this device.
++ */
++&q6v5_wcss {
++	status = "okay";
++};
++
++&wifi {
++	// IPQ5018 2.4 GHz
++	qcom,rproc = <&q6_wcss_pd1>;
++	qcom,ath11k-calibration-variant = "Ruijie-RG-MA3063";
++	qcom,ath11k-fw-memory-mode = <1>;
++	qcom,bdf-addr = <0x4c400000>;
++
++	ieee80211-freq-limit = <2400000 2483000>;
++
++	status = "okay";
++};
++
++&wifi1 {
++	// QCN6102 5 GHz
++	qcom,rproc = <&q6_wcss_pd2>;
++	qcom,userpd-subsys-name = "q6v5_wcss_userpd2";
++	qcom,ath11k-calibration-variant = "Ruijie-RG-MA3063";
++	qcom,ath11k-fw-memory-mode = <1>;
++	qcom,bdf-addr = <0x4d100000>;
++	qcom,m3-dump-addr = <0x4df00000>;
++
++	/*
++	 * Keep U-NII-3 reachable: with country ID the firmware's own
++	 * regulatory table only offers 5735-5815 MHz, so capping at 5730 MHz
++	 * leaves the radio with no channel at all.
++	 */
++	ieee80211-freq-limit = <5150000 5850000>;
++
++	status = "okay";
++};
+diff --git a/target/linux/qualcommax/image/ipq50xx.mk b/target/linux/qualcommax/image/ipq50xx.mk
+index 7fab522..6d17cda 100644
+--- a/target/linux/qualcommax/image/ipq50xx.mk
++++ b/target/linux/qualcommax/image/ipq50xx.mk
+@@ -165,6 +165,36 @@ define Device/linksys_spnmx56
+ endef
+ TARGET_DEVICES += linksys_spnmx56
+ 
++# Duplicate the FIT configuration node under another name, so a single image
++# boots with vendor U-Boots that look for different board configurations.
++define Build/fit-its-add-config
++	awk -v src="$(DEVICE_DTS_CONFIG)" -v dst="$(1)" \
++		'$$1 == src && $$2 == "{" { grab = 1 } { print } grab { blk = blk $$0 "\n" } grab && $$1 == "};" { grab = 0; sub(src, dst, blk); printf "%s", blk }' \
++		$@.its > $@.its.new
++	@mv $@.its.new $@.its
++endef
++
++define Device/ruijie_rg-ma3063
++	$(call Device/FitImageLzma)
++	$(call Device/UbiFit)
++	# Depending on the U-Boot build, units look for mp02.1 or mp03.5-c1
++	KERNEL = kernel-bin | lzma | \
++		fit-its lzma $$(KDIR)/image-$$(DEVICE_DTS).dtb | \
++		fit-its-add-config config@mp03.5-c1 | \
++		fit-image lzma $$(KDIR)/image-$$(DEVICE_DTS).dtb
++	DEVICE_VENDOR := Ruijie
++	DEVICE_MODEL := RG-MA3063
++	DEVICE_DTS_CONFIG := config@mp02.1
++	SOC := ipq5018
++	BLOCKSIZE := 128k
++	PAGESIZE := 2048
++	IMAGE_SIZE := 51200k
++	NAND_SIZE := 128m
++	DEVICE_PACKAGES := ath11k-firmware-ipq5018-qcn6122 \
++		ipq-wifi-ruijie_rg-ma3063
++endef
++TARGET_DEVICES += ruijie_rg-ma3063
++
+ define Device/xiaomi_ax6000
+ 	$(call Device/FitImage)
+ 	$(call Device/UbiFit)
+diff --git a/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network b/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network
+index 09a68d7..db3a0a0 100644
+--- a/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network
++++ b/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network
+@@ -20,6 +20,7 @@ ipq50xx_setup_interfaces()
+ 	linksys,mx2000|\
+ 	linksys,mx5500|\
+ 	linksys,spnmx56|\
++	ruijie,rg-ma3063|\
+ 	xiaomi,ax6000)
+ 		ucidef_set_interfaces_lan_wan "lan1 lan2 lan3" "wan"
+ 		;;
+diff --git a/target/linux/qualcommax/ipq50xx/base-files/etc/hotplug.d/firmware/11-ath11k-caldata b/target/linux/qualcommax/ipq50xx/base-files/etc/hotplug.d/firmware/11-ath11k-caldata
+index d4a913b..7332afc 100644
+--- a/target/linux/qualcommax/ipq50xx/base-files/etc/hotplug.d/firmware/11-ath11k-caldata
++++ b/target/linux/qualcommax/ipq50xx/base-files/etc/hotplug.d/firmware/11-ath11k-caldata
+@@ -17,6 +17,12 @@ case "$FIRMWARE" in
+ 		ath11k_patch_mac $wlan_mac 0
+ 		ath11k_set_macflag
+ 		;;
++	ruijie,rg-ma3063)
++		caldata_extract "0:art" 0x1000 0x20000
++		ath11k_patch_mac $(macaddr_add $(get_mac_label_dt) 2) 0
++		ath11k_remove_regdomain
++		ath11k_set_macflag
++		;;
+ 	glinet,gl-b3000)
+ 		caldata_extract "0:art" 0x1000 0x20000
+ 		ath11k_patch_mac $(macaddr_add $(get_mac_label_dt) 3) 0
+@@ -62,6 +68,12 @@ case "$FIRMWARE" in
+ 		ath11k_patch_mac $wlan_mac 0
+ 		ath11k_set_macflag
+ 		;;
++	ruijie,rg-ma3063)
++		caldata_extract "0:art" 0x26800 0x20000
++		ath11k_patch_mac $(macaddr_add $(get_mac_label_dt) 3) 0
++		ath11k_remove_regdomain
++		ath11k_set_macflag
++		;;
+ 	glinet,gl-b3000)
+ 		caldata_extract "0:art" 0x26800 0x20000
+ 		ath11k_patch_mac $(macaddr_add $(get_mac_label_dt) 4) 0
+diff --git a/target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/platform.sh b/target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/platform.sh
+index c6e8d0f..719884d 100644
+--- a/target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/platform.sh
++++ b/target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/platform.sh
+@@ -181,7 +181,8 @@ platform_do_upgrade() {
+ 	case "$(board_name)" in
+ 	cmcc,pz-l8|\
+ 	elecom,wrc-x3000gs2|\
+-	iodata,wn-dax3000gr)
++	iodata,wn-dax3000gr|\
++	ruijie,rg-ma3063)
+ 		local delay
+ 
+ 		delay=$(fw_printenv bootdelay)
+-- 
+2.43.0
+
