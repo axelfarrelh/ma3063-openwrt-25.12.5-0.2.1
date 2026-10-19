@@ -15,6 +15,10 @@ on:
           - "1"
         default: "2"
         required: true
+      ath11k_small_rings:
+        description: "Kecilkan ring RX/TX ath11k agar RAM lebih lega (disarankan untuk 256 MB)"
+        type: boolean
+        default: true
 
 jobs:
   build:
@@ -59,6 +63,12 @@ jobs:
           test "$(grep -c "qcom,ath11k-fw-memory-mode = <${FW_MEM_MODE}>;" "$dts")" -eq 2
           grep -n "qcom,ath11k-fw-memory-mode" "$dts"
 
+      - name: Patch ath11k ring kecil (hemat RAM)
+        if: ${{ inputs.ath11k_small_rings }}
+        working-directory: openwrt
+        run: |
+          cp -v ../patches-mac80211/*.patch package/kernel/mac80211/patches/ath11k/
+
       - name: Feeds
         working-directory: openwrt
         run: |
@@ -84,7 +94,7 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: openwrt-${{ inputs.openwrt_tag }}-ruijie_rg-ma3063-fwmem${{ inputs.fw_memory_mode }}
+          name: openwrt-${{ inputs.openwrt_tag }}-ruijie_rg-ma3063-fwmem${{ inputs.fw_memory_mode }}${{ inputs.ath11k_small_rings && '-smallrings' || '' }}
           path: |
             openwrt/bin/targets/qualcommax/ipq50xx/*ruijie_rg-ma3063*
             openwrt/bin/targets/qualcommax/ipq50xx/sha256sums
