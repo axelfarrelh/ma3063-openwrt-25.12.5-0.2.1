@@ -1,0 +1,53 @@
+From: ma3063-openwrt <noreply@example.invalid>
+Subject: [PATCH] wifi: ath11k: use QSDK 256M ring sizes on low-memory devices
+
+ath11k fills its RX rings with ~2.5 KiB buffers at probe time, per radio,
+even while the interfaces are down. On a 256 MiB IPQ5018 + QCN6102 board
+(Ruijie RG-MA3063) unloading ath11k frees ~97 MiB.
+
+Use the ring sizes from the vendor (Ruijie/QSDK) firmware for the same
+board, taken from /ini/internal/QCA5018_i.ini and QCN6122_i.ini, which
+the QSDK scripts set for the 256 MiB profile (update_ini_for_lowmem):
+
+  ring                     ath11k   QSDK 256M   this patch
+  rxdma monitor buf          4096        128          128
+  rxdma monitor dst          2048        128          128
+  rxdma monitor status       1024        512          512
+  rxdma monitor desc         4096       4096          512
+  tx completion             32768       8192         8192
+
+The RX buffer ring keeps the ath11k default (4096), as does QSDK's refill
+ring. The monitor descriptor ring only holds descriptors; IPQ5018 does not
+support monitor mode in ath11k, so it stays small.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0111edZhvhVsk8YZUqvNB7tj
+---
+diff --git a/drivers/net/wireless/ath/ath11k/dp.h b/drivers/net/wireless/ath/ath11k/dp.h
+index 7a55afd..725fecf 100644
+--- a/drivers/net/wireless/ath/ath11k/dp.h
++++ b/drivers/net/wireless/ath/ath11k/dp.h
+@@ -206,7 +206,7 @@ struct ath11k_pdev_dp {
+ #define DP_WBM_RELEASE_RING_SIZE	64
+ #define DP_TCL_DATA_RING_SIZE		512
+ #define DP_TCL_DATA_RING_SIZE_WCN6750	2048
+-#define DP_TX_COMP_RING_SIZE		32768
++#define DP_TX_COMP_RING_SIZE		8192
+ #define DP_TX_IDR_SIZE			DP_TX_COMP_RING_SIZE
+ #define DP_TCL_CMD_RING_SIZE		32
+ #define DP_TCL_STATUS_RING_SIZE		32
+@@ -220,10 +220,10 @@ struct ath11k_pdev_dp {
+ #define DP_RXDMA_BUF_RING_SIZE		4096
+ #define DP_RXDMA_REFILL_RING_SIZE	2048
+ #define DP_RXDMA_ERR_DST_RING_SIZE	1024
+-#define DP_RXDMA_MON_STATUS_RING_SIZE	1024
+-#define DP_RXDMA_MONITOR_BUF_RING_SIZE	4096
+-#define DP_RXDMA_MONITOR_DST_RING_SIZE	2048
+-#define DP_RXDMA_MONITOR_DESC_RING_SIZE	4096
++#define DP_RXDMA_MON_STATUS_RING_SIZE	512
++#define DP_RXDMA_MONITOR_BUF_RING_SIZE	128
++#define DP_RXDMA_MONITOR_DST_RING_SIZE	128
++#define DP_RXDMA_MONITOR_DESC_RING_SIZE	512
+ 
+ #define DP_RX_RELEASE_RING_NUM	3
+ 
